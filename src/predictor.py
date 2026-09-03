@@ -15,7 +15,7 @@ class PredictionResult:
 class Predictor:
     def __init__(self, checkpoint_path: Path) -> None:
         if not checkpoint_path.exists():
-            raise FileNotFoundError(f"Model checkpoint not found: {checkpoint_path}. Run python tools/train.py")
+            raise FileNotFoundError(f"Model checkpoint not found: {checkpoint_path}. Run python train.py")
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
         elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():

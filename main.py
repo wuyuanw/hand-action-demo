@@ -1,9 +1,11 @@
 from __future__ import annotations
 import argparse
+from pathlib import Path
 import cv2
 from config import *
 from src.camera import Camera
 from src.feature_extractor import StatefulFeatureExtractor
+from src.dhg2016 import DHGCompatibleFeatureExtractor
 from src.hand_tracker import HandTracker
 from src.heuristic_features import compute_heuristics
 from src.predictor import Predictor
@@ -16,13 +18,17 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--camera", type=int, default=CAMERA_INDEX)
     ap.add_argument("--debug", action="store_true")
+    ap.add_argument("--checkpoint", type=Path, default=MODEL_PATH,
+                    help="Checkpoint to use. For DHG-2016: models/hand_action_dhg14_lstm.pth")
+    ap.add_argument("--feature-mode", choices=["legacy", "dhg"], default="legacy",
+                    help="Use 'dhg' with a checkpoint trained by tools/train_dhg2016.py")
     args = ap.parse_args()
 
     camera = Camera(args.camera, CAMERA_WIDTH, CAMERA_HEIGHT)
     tracker = HandTracker(HAND_LANDMARKER_MODEL_PATH, MAX_NUM_HANDS)
-    extractor = StatefulFeatureExtractor()
+    extractor = DHGCompatibleFeatureExtractor() if args.feature_mode == "dhg" else StatefulFeatureExtractor()
     buffer = SequenceBuffer(SEQUENCE_LENGTH, INPUT_SIZE)
-    predictor = Predictor(MODEL_PATH)
+    predictor = Predictor(args.checkpoint)
     smoother = PredictionSmoother(SMOOTHING_WINDOW, CONFIDENCE_THRESHOLD)
     fps_meter = FPSMeter()
     no_hand = 0

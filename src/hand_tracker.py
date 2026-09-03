@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+import platform
 import cv2
 import numpy as np
 
@@ -20,8 +21,8 @@ class HandResult:
     handedness: Optional[str] = None
 
 class HandTracker:
-    """MediaPipe Tasks HandLandmarker wrapper using VIDEO mode."""
-    def __init__(self, model_path: Path, max_num_hands: int = 1) -> None:
+    """MediaPipe Tasks HandLandmarker wrapper for VIDEO or IMAGE mode."""
+    def __init__(self, model_path: Path, max_num_hands: int = 1, running_mode: str = "video") -> None:
         if not model_path.exists():
             raise FileNotFoundError(
                 f"Missing MediaPipe model: {model_path}. Run: python tools/download_models.py"
@@ -31,14 +32,39 @@ class HandTracker:
         except ImportError as exc:
             raise RuntimeError("mediapipe is not installed. Run pip install -r requirements.txt") from exc
 
+        # mediapipe 1.0.1 currently aborts inside DrishtiMetalHelper while opening
+        # HandLandmarker graphs on Apple Silicon macOS. Native SIGABRT cannot be
+        # caught by Python, so fail before graph construction with an actionable
+        # environment fix instead of crashing the whole preprocessing job.
+        mp_version = getattr(mp, "__version__", "unknown")
+        if platform.system() == "Darwin" and platform.machine() == "arm64" and mp_version == "1.0.1":
+            raise RuntimeError(
+                "mediapipe 1.0.1 is not supported for HandLandmarker on Apple Silicon in this project "
+                "because it can abort inside DrishtiMetalHelper. Reinstall project dependencies with:\n"
+                "  python -m pip uninstall -y mediapipe\n"
+                "  python -m pip install -r requirements.txt\n"
+                "This installs mediapipe==0.10.30 on arm64 macOS."
+            )
+
+        mode = running_mode.strip().lower()
+        if mode not in {"video", "image"}:
+            raise ValueError("running_mode must be 'video' or 'image'")
+
         self.mp = mp
+        self.running_mode = mode
         BaseOptions = mp.tasks.BaseOptions
         HandLandmarker = mp.tasks.vision.HandLandmarker
         HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
         RunningMode = mp.tasks.vision.RunningMode
+        mp_running_mode = RunningMode.VIDEO if mode == "video" else RunningMode.IMAGE
+
+        base_options = BaseOptions(
+            model_asset_path=str(model_path),
+            delegate=BaseOptions.Delegate.CPU,
+        )
         options = HandLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=str(model_path)),
-            running_mode=RunningMode.VIDEO,
+            base_options=base_options,
+            running_mode=mp_running_mode,
             num_hands=max_num_hands,
             min_hand_detection_confidence=0.5,
             min_hand_presence_confidence=0.5,
@@ -50,8 +76,11 @@ class HandTracker:
     def process(self, frame_bgr: np.ndarray) -> HandResult:
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = self.mp.Image(image_format=self.mp.ImageFormat.SRGB, data=rgb)
-        self.timestamp_ms += 1
-        result = self.landmarker.detect_for_video(mp_image, self.timestamp_ms)
+        if self.running_mode == "video":
+            self.timestamp_ms += 1
+            result = self.landmarker.detect_for_video(mp_image, self.timestamp_ms)
+        else:
+            result = self.landmarker.detect(mp_image)
         if not result.hand_landmarks:
             return HandResult(False)
         pts = np.array([[p.x, p.y, p.z] for p in result.hand_landmarks[0]], dtype=np.float32)
